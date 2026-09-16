@@ -1,0 +1,4 @@
+ollama
+rich
+pydantic
+pytest
