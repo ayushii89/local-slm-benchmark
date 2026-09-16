@@ -1,5 +1,7 @@
 # local-slm-benchmark
 
+[![Tests](https://github.com/ayushii89/local-slm-benchmark/actions/workflows/tests.yml/badge.svg)](https://github.com/ayushii89/local-slm-benchmark/actions/workflows/tests.yml)
+
 Foundation work for an offline local AI assistant: benchmarking small local
 language models served via [Ollama](https://ollama.com), in three phases.
 
