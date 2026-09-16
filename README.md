@@ -1,17 +1,27 @@
 # local-slm-benchmark
 
 [![Tests](https://github.com/ayushii89/local-slm-benchmark/actions/workflows/tests.yml/badge.svg)](https://github.com/ayushii89/local-slm-benchmark/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Foundation work for an offline local AI assistant: benchmarking small local
-language models served via [Ollama](https://ollama.com), in three phases.
+A local, fully-offline RAG assistant -- built on a rigorous evaluation of
+*which* small language model should power it. Everything runs through
+[Ollama](https://ollama.com) on-device: no cloud API calls, no data leaving
+the machine.
 
-## Models benchmarked
+**Models compared**: `llama3.2:3b` · `phi4-mini` · `mistral:7b`
 
-- `llama3.2:3b`
-- `phi4-mini`
-- `mistral:7b`
+**The short version**: 3 phases of testing (speed, reliability, then a full
+comparison), followed by a working assistant built on the winner.
+`llama3.2:3b` won -- fastest and smallest, and just as good quality-wise as
+the other two on this test set. The assistant defaults to it.
 
-See [models.py](models.py).
+| | [Phase 1: Speed](#phase-1-speed) | [Phase 2: Reliability](#phase-2-reliability) | [Phase 3: Comparison](#phase-3-comparison) | [The Assistant](#the-assistant) |
+|---|---|---|---|---|
+| llama3.2-3b | 53.6 tok/s | 8/8 valid | 34.2 tok/s · 2.2GB · 4.71/5 | ✅ default |
+| phi4-mini | 30.2 tok/s | 8/8 valid | 29.6 tok/s · 2.7GB · 4.65/5 | `--model phi4-mini` |
+| mistral-7b | 15.2 tok/s | 8/8 valid | 15.8 tok/s · 4.5GB · 4.75/5 | `--model mistral-7b` |
+
+Full technical report: [results/comparison_report_20260916T171703Z.md](results/comparison_report_20260916T171703Z.md)
 
 ## Setup
 
@@ -27,128 +37,62 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Phase 1: Measurement
+## Phase 1: Speed
 
-Raw inference speed, computed from Ollama's own response timing fields
-(nanoseconds), not client-side wall-clock timing:
-
-- **TTFT (time to first token, ms)** = `prompt_eval_duration / 1e6`
-- **Tokens/sec** = `eval_count / (eval_duration / 1e9)`
-- **Total latency (ms)** = `total_duration / 1e6`
-- **Cold-start load duration (ms)** = `load_duration / 1e6`, recorded once per
-  model from a warm-up call, kept separate from steady-state numbers.
+How fast does each model actually respond? Measures tokens/sec, time-to-first-token,
+and total latency -- read straight from Ollama's own timing data, not a stopwatch
+around the API call.
 
 ```bash
-python benchmark.py                          # all models, 3 repeats x 12 prompts
-python benchmark.py --models llama3.2-3b --repeats 5
-python report.py                              # console table from the latest results file
-python report.py results/20260101T000000Z.jsonl
+python benchmark.py          # run all 3 models
+python report.py             # see the results as a table
 ```
 
-## Phase 2: Structure & Determinism
+## Phase 2: Reliability
 
-Forces JSON output matching a Pydantic schema (`schemas.StructuredAnswer`),
-validates it, and retries once with the validation error fed back before
-failing gracefully. Core logic in `structured_generate.generate_structured()`,
-generalized (schema + prompt builders as arguments) so Phase 3's judge step
-reuses the same validate/retry/fail-gracefully path.
+Can each model reliably return well-formed, structured data (not just free
+text)? Forces JSON output, validates it against a schema, and gives the model
+one retry before giving up cleanly.
 
 ```bash
 python run_structured_eval.py
-python structured_report.py                   # success (1st try) / after-retry / failed, per model
+python structured_report.py   # success rate per model
 ```
 
-## Phase 3: Model Comparison Study
+## Phase 3: Comparison
 
-Speed + peak memory + LLM-judged output quality across a standardized
-40-prompt set (`comparison_prompts.py`, 10 each of factual/reasoning/code/
-longform). Each candidate's answer is judged by the *other two* models only
-(never itself) and `quality_score` is the mean of those two independent
-judgments. Memory is the *peak* VRAM/RAM sampled every 200ms during
-generation (`memory_utils.PeakMemoryTracker`), not a single post-call snapshot.
+The full picture: speed + memory usage + answer quality, across 40 varied
+questions. Quality is judged by having each model's answers scored by the
+*other two* models (never judging itself), so no single model's opinion
+decides the outcome.
 
 ```bash
-python run_comparison.py --models llama3.2-3b   # smoke-test one model first
-python run_comparison.py                        # full 3-model sweep (slow -- mistral-7b is both a
-                                                  # candidate and a judge for every prompt)
-python comparison_report.py                      # console table + writes a Markdown technical report
+python run_comparison.py --models llama3.2-3b   # try one model first (faster)
+python run_comparison.py                        # all 3 (slow, several minutes)
+python comparison_report.py                      # table + writes a full report
 ```
 
-## Integration: Local RAG Assistant
+## The Assistant
 
-Reuses `~/rag-project`'s existing retrieval pipeline (hybrid semantic + BM25,
-RRF fusion, cross-encoder reranking, already-ingested `chroma_index/`) but
-swaps its cloud (Groq) generation step for a local Ollama model, validated
-against `schemas.RAGAnswer` (answer, citations, confidence) through the same
-`generate_structured()` used in Phase 2/3. `~/rag-project`'s own files are
-not modified, only imported (read-only). Model defaults to `llama3.2-3b`,
-per Phase 3's finding: at this prompt set, quality across all three models is
-within judge noise (4.65-4.75/5), so llama3.2-3b's ~2x speed and half the
-VRAM of mistral-7b is the better tradeoff, not a quality compromise.
-
-Run with the **system Python** (`python3`, not this project's `.venv`) --
-it already has `rag-project`'s langchain/chroma/sentence-transformers stack
-installed; only `pip install ollama` was needed there. The `.venv` stays
-deliberately free of that heavier dependency set.
+The point of all that testing: a working command-line assistant that answers
+questions grounded in real documents, using the model the testing recommended.
 
 ```bash
-python3 assistant.py "What does the eval say about reranking?"   # one-shot
-python3 assistant.py                                              # interactive loop
-python3 assistant.py --model mistral-7b --k 8 "..."
-python3 assistant.py --corpus ~/rag-project/chroma_db "..."      # answer over a different index
+python3 assistant.py "What is the Spiral model?"   # one-shot
+python3 assistant.py                                # chat interactively
+python3 assistant.py --model mistral-7b "..."       # try a different model
 ```
 
-Citations are validated after generation, not just trusted from the prompt:
-the model's raw citations are matched against the sources actually retrieved
-(normalized against `"Source: "`/`[...]` wrapping, then a substring fallback
-for a truncated filename like `"Agile model (1).pdf"` against the real
-`"2 Incremental SDLC Model, ..., Agile model (1).pdf"`), and anything that
-still doesn't match is dropped and reported rather than shown as a real
-citation. Pydantic alone can't catch this -- `citations` is just `list[str]`,
-so a shortened, wrapped, or fabricated source label passes schema validation
-but is still wrong.
+It answers only from retrieved documents (no making things up -- if the
+documents don't have the answer, it says so), cites its sources, remembers
+recent turns of the conversation for natural follow-ups, and reuses an
+existing retrieval pipeline from a separate project (`~/rag-project`) rather
+than rebuilding one from scratch.
 
-Interactive mode keeps the last `--history-turns` Q&A pairs (default 3) so
-follow-ups like "what are its disadvantages?" resolve against the prior
-question. A genuinely ambiguous follow-up (e.g. "what about Agile?" after
-several turns about a different SDLC model, where the retrieved context
-contains multiple distinct facts about Agile) used to make `llama3.2-3b`
-pick a narrow or unhelpful chunk and stay overconfident about it -- a prompt
-instruction alone didn't fix this (confirmed by re-testing after adding one,
-and by checking `mistral-7b` handled the same case correctly, meaning it was
-a capability limit, not a wording problem). The actual fix, in
-`query_rewrite.py`: before retrieval, an ambiguous follow-up is first
-rewritten into a self-contained question ("what about Agile?" ->
-"What are the characteristics of the Agile model?") using conversation
-history, through the same generate_structured() validate/retry/
-fail-gracefully path as everything else -- decoupling "figure out what's
-being asked" from "answer it" instead of asking one prompt to do both.
-Falls back to the original question if rewriting itself fails, so it never
-blocks the pipeline. Re-verified against the exact failing case after the
-fix: correct, fully-grounded answer instead of a one-word non-answer.
-
-`--corpus` must point at a directory (or a path that doesn't exist yet --
-Chroma creates it); pointing it at an existing file gives a clean error
-instead of a raw Chroma stack trace.
-
-**Known architectural limitation, not a bug**: this is a document-grounded
-RAG system, not a conversational-memory system. A meta-question about the
-conversation itself ("summarize everything we've discussed," "which model
-did we cover first?," "how many have we covered?") retrieves from the
-document corpus like any other question -- which has no good match for a
-question about *the conversation* -- and/or exceeds the capped
-`--history-turns` window, so it answers confidently and wrong rather than
-recognizing it can't answer that class of question. Tested with an 11-turn
-conversation: turns asking about SDLC content were all correct; three
-meta-questions at the end were all wrong. A real fix would mean detecting
-meta-questions and routing them to a path that reads full conversation
-history directly instead of going through retrieval -- a feature addition,
-not a patch, so it's documented here rather than rushed.
-
-Concurrent requests to the same Ollama server were tested (two threads
-calling `ollama.generate` simultaneously) -- no crash or deadlock, but
-Ollama serializes them rather than running true parallel inference, so this
-assistant isn't built for concurrent multi-user load.
+> Run this one with plain `python3` (not the `.venv`) -- it needs a
+> retrieval stack (`langchain`/`chroma`) that's already installed system-wide
+> from the other project, and keeping it out of `.venv` keeps this repo's own
+> dependencies light.
 
 ## Tests
 
@@ -156,13 +100,64 @@ assistant isn't built for concurrent multi-user load.
 pytest tests/
 ```
 
-Covers `benchmark.extract_metrics()` (the ns-to-ms/tok-per-s math) and
-`structured_generate.generate_structured()` (validate/retry/fail-gracefully),
-with `ollama.generate` mocked -- no Ollama server needed to run these.
+14 tests, no Ollama server required (the model calls are mocked). Runs
+automatically on every push via GitHub Actions.
+
+---
+
+## Engineering notes: what actually broke, and how it got fixed
+
+The short version above is the pitch. This section is the detail, for anyone
+who wants to see the actual debugging, not just the finished product.
+
+**A prompt bug broke structured output for one model entirely.** Early on,
+dumping the raw JSON Schema into the prompt made `mistral-7b` echo the schema
+back instead of answering it -- 0/8 valid responses. Replacing the schema
+dump with a plain field list plus one example fixed it completely (8/8,
+first try, across all three models).
+
+**A tag-matching bug made memory readings silently wrong.** Ollama reports
+running models with a `:latest` suffix (`phi4-mini:latest`) even when asked
+for a bare name (`phi4-mini`); an exact-match check meant `phi4-mini`'s
+memory usage always read as 0. Fixed by also matching on the name with the
+tag stripped.
+
+**A single LLM judge gave inconsistent scores** -- including once scoring a
+factually correct answer as wrong, with a self-contradictory explanation.
+Fixed by having each model's answers judged by the *other two* models only,
+averaging their scores, so no one judge's inconsistency (or self-judging
+bias) decides the result.
+
+**Citations needed a second layer of checking beyond the schema.** A model
+can return a citation that's valid *JSON* but not a *real* source -- a
+Pydantic schema can't catch that. The assistant now cross-checks every
+citation against the documents actually retrieved, dropping and flagging
+anything that doesn't match (handling both wrapped labels like
+`"Source: ..."` and truncated filenames).
+
+**A vague follow-up question could get a wrong, overconfident answer.**
+"What about Agile?" after a few turns about a different topic retrieved the
+right documents just fine, but the model sometimes picked the wrong fact
+among several in the context and answered at full confidence anyway. A
+prompt instruction alone didn't reliably fix this -- confirmed by testing
+that a bigger model (`mistral-7b`) handled the same case correctly, meaning
+it was a capability limit, not a wording problem. The real fix: rewrite
+ambiguous follow-ups into a self-contained question *before* retrieval,
+using the conversation so far, so retrieval and answering aren't both
+guessing at the same time.
+
+**One thing that's a real limitation, not a bug**: this assistant answers
+questions *about the documents*, not questions *about the conversation
+itself*. Asking it to "summarize everything we've discussed" gets treated
+like any other document search -- and document search has nothing useful to
+return for a question about the conversation, so it answers confidently and
+wrong. Fixing this properly means detecting that class of question and
+routing it to conversation history directly, which is a real feature to
+build, not a quick patch -- so for now it's documented rather than papered
+over with a half-fix.
 
 ## Results
 
-All sweeps write to `results/*.jsonl`, one JSON record per line, flushed
-immediately after each call (a crash mid-sweep doesn't lose completed runs).
-Reports default to the most recently modified matching file, or take an
-explicit path as an argument.
+All runs write to `results/*.jsonl`, one line per prompt, saved as it goes
+(a crash mid-run doesn't lose what's already done). Reports read the most
+recent matching file by default, or you can point at a specific one.
