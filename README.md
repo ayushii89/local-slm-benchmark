@@ -94,13 +94,34 @@ than rebuilding one from scratch.
 > from the other project, and keeping it out of `.venv` keeps this repo's own
 > dependencies light.
 
+## Web UI
+
+A browser UI over the same assistant, plus a live dashboard of all three
+phases' results in one place:
+
+```bash
+pip install fastapi "uvicorn[standard]"   # one-time, into system python3
+python3 server.py
+# open http://127.0.0.1:8000
+```
+
+Chat tab: ask questions, pick a model, see citations and confidence per
+answer. Dashboard tab: real numbers pulled live from the latest results
+files -- not a hardcoded snapshot -- via `benchmark_data.py`, a small module
+kept deliberately free of `langchain`/FastAPI so its data logic stays
+testable in the lightweight `.venv` even though `server.py` itself (needed
+for the chat endpoint) has to run under system Python like `assistant.py`.
+Conversation history for the chat tab lives in server memory only, keyed by
+a browser-generated session id -- lost on server restart, which is fine for
+a local single-user demo.
+
 ## Tests
 
 ```bash
 pytest tests/
 ```
 
-14 tests, no Ollama server required (the model calls are mocked). Runs
+18 tests, no Ollama server required (the model calls are mocked). Runs
 automatically on every push via GitHub Actions.
 
 ---
@@ -121,6 +142,17 @@ running models with a `:latest` suffix (`phi4-mini:latest`) even when asked
 for a bare name (`phi4-mini`); an exact-match check meant `phi4-mini`'s
 memory usage always read as 0. Fixed by also matching on the name with the
 tag stripped.
+
+**An unscoped file glob made Phase 1's report silently read the wrong
+data.** `report.py` found "the latest results file" with a glob of
+`*.jsonl`, which also matches Phase 2's `structured_*.jsonl` and Phase 3's
+`comparison_*.jsonl` files sitting in the same `results/` directory. Since
+all three share field names like `tokens_per_sec`, a mismatch didn't crash
+-- it just labeled Phase 3 data as "Phase 1 Inference Benchmark" and printed
+it. Reproduced live (confirmed `report.py` really was reading a Phase 3
+file) before fixing the glob to match only Phase 1's actual naming
+convention (a bare timestamp, `[0-9]*.jsonl`) and re-verifying against the
+correct file.
 
 **A single LLM judge gave inconsistent scores** -- including once scoring a
 factually correct answer as wrong, with a self-contradictory explanation.

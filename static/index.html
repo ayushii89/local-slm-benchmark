@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>local-slm-benchmark</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="eyebrow">local-slm-benchmark &middot; offline, no cloud calls</div>
+      <div class="header-row">
+        <h1>Local SLM Benchmark</h1>
+        <nav class="tabs" role="tablist">
+          <button class="tab-btn active" data-tab="chat" role="tab" aria-selected="true">Chat</button>
+          <button class="tab-btn" data-tab="dashboard" role="tab" aria-selected="false">Dashboard</button>
+        </nav>
+      </div>
+    </header>
+
+    <!-- ============ CHAT TAB ============ -->
+    <section id="tab-chat" class="tab-panel active">
+      <div class="chat-controls">
+        <label class="field">
+          <span class="field-label">Model</span>
+          <select id="modelSelect" class="mono"></select>
+        </label>
+        <button id="resetBtn" class="btn-ghost" type="button">Reset conversation</button>
+      </div>
+
+      <div id="chatThread" class="chat-thread">
+        <div class="empty-state">
+          Ask a question grounded in the ingested corpus. Answers are
+          cited and honest about what's not in the documents.
+        </div>
+      </div>
+
+      <form id="chatForm" class="chat-input-row">
+        <input id="chatInput" type="text" placeholder="Ask a question..." autocomplete="off" required>
+        <button type="submit" class="btn-primary">Send</button>
+      </form>
+    </section>
+
+    <!-- ============ DASHBOARD TAB ============ -->
+    <section id="tab-dashboard" class="tab-panel">
+      <div id="dashboardContent">
+        <div class="empty-state">Loading benchmark results...</div>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -39,10 +39,24 @@ from src.retrieval.hybrid import HybridRetriever  # noqa: E402
 def answer_question(
     retriever: HybridRetriever, tag: str, question: str,
     history: list[tuple[str, str]] | None = None,
-) -> str | None:
+) -> dict:
     """Answers `question`, optionally informed by prior (question, answer)
-    turns for follow-ups. Returns the answer text (for the caller to append
-    to history), or None on retrieval/generation failure.
+    turns for follow-ups. Pure data -- no printing, so both the CLI
+    (print_answer()) and server.py's /api/chat can use it. Returns:
+        {
+          "success": bool,
+          "answer": str | None,
+          "citations": list[str],
+          "dropped_citations": list[str],
+          "confidence": float | None,
+          "attempts": int,
+          "rewritten_query": str | None,   # None if unchanged / no history
+          "n_retrieved": int,
+          "retrieve_mode": str,
+          "retrieval_ms": float,   # total retrieval time (fuse + rerank)
+          "generation_ms": float,
+          "error": str | None,
+        }
 
     When history is present, `question` is first rewritten into a
     self-contained query (query_rewrite.rewrite_query) before retrieval and
@@ -53,14 +67,18 @@ def answer_question(
     what a prompt-only instruction on the answer step did not.
     """
     effective_question = rewrite_query(tag, question, history) if history else question
-    if effective_question != question:
-        print(f'(rewritten for retrieval: "{effective_question}")')
+    rewritten_query = effective_question if effective_question != question else None
 
     documents, trace = retriever.retrieve(effective_question, trace=True)
 
     if not documents:
-        print("No documents in the index at all -- nothing to retrieve from.\n")
-        return None
+        return {
+            "success": False, "answer": None, "citations": [], "dropped_citations": [],
+            "confidence": None, "attempts": 0, "rewritten_query": rewritten_query,
+            "n_retrieved": 0, "retrieve_mode": trace.mode, "retrieval_ms": trace.total_ms,
+            "generation_ms": 0.0,
+            "error": "No documents in the index at all -- nothing to retrieve from.",
+        }
 
     context = format_docs(documents)
 
@@ -79,13 +97,14 @@ def answer_question(
     )
     gen_ms = (time.perf_counter() - gen_started) * 1000
 
-    print(f"\nRetrieved {len(documents)} chunks in {trace.total_ms:.0f}ms "
-          f"(mode={trace.mode}, retrieve={trace.retrieve_ms:.0f}ms, rerank={trace.rerank_ms:.0f}ms)")
-
     if not result["success"]:
-        print(f"\nFAILED after {result['attempts']} attempt(s): {result['error']}")
-        print(f"Raw model output:\n{result['raw_response']}\n")
-        return None
+        return {
+            "success": False, "answer": None, "citations": [], "dropped_citations": [],
+            "confidence": None, "attempts": result["attempts"], "rewritten_query": rewritten_query,
+            "n_retrieved": len(documents), "retrieve_mode": trace.mode, "retrieval_ms": trace.total_ms,
+            "generation_ms": gen_ms,
+            "error": f"{result['error']} -- raw output: {result['raw_response']}",
+        }
 
     parsed = result["parsed"]
     # Dedupe citations, preserving first-seen order -- the model sometimes
@@ -130,13 +149,33 @@ def answer_question(
         (citations if match else dropped).append(match or c)
     citations = list(dict.fromkeys(citations))
 
-    print(f"\nAnswer ({result['attempts']} attempt(s)):\n  {parsed['answer']}")
-    print(f"\nCitations: {', '.join(citations) if citations else '(none)'}")
-    if dropped:
-        print(f"  (dropped unverifiable citation(s) from model output: {dropped})")
-    print(f"Confidence: {parsed['confidence']:.2f}")
-    print(f"Generation: {gen_ms:.0f}ms wall time ({result['attempts']} model call(s))\n")
-    return parsed["answer"]
+    return {
+        "success": True, "answer": parsed["answer"], "citations": citations,
+        "dropped_citations": dropped, "confidence": parsed["confidence"],
+        "attempts": result["attempts"], "rewritten_query": rewritten_query,
+        "n_retrieved": len(documents), "retrieve_mode": trace.mode, "retrieval_ms": trace.total_ms,
+        "generation_ms": gen_ms, "error": None,
+    }
+
+
+def print_answer(result: dict) -> None:
+    """CLI-only formatting of an answer_question() result dict."""
+    if result["rewritten_query"]:
+        print(f'(rewritten for retrieval: "{result["rewritten_query"]}")')
+
+    print(f"\nRetrieved {result['n_retrieved']} chunks in {result['retrieval_ms']:.0f}ms "
+          f"(mode={result['retrieve_mode']})")
+
+    if not result["success"]:
+        print(f"\nFAILED: {result['error']}\n")
+        return
+
+    print(f"\nAnswer ({result['attempts']} attempt(s)):\n  {result['answer']}")
+    print(f"\nCitations: {', '.join(result['citations']) if result['citations'] else '(none)'}")
+    if result["dropped_citations"]:
+        print(f"  (dropped unverifiable citation(s) from model output: {result['dropped_citations']})")
+    print(f"Confidence: {result['confidence']:.2f}")
+    print(f"Generation: {result['generation_ms']:.0f}ms wall time ({result['attempts']} model call(s))\n")
 
 
 DEFAULT_HISTORY_TURNS = 3
@@ -182,7 +221,7 @@ def main():
     print(f"Ready. Model: {args.model} ({tag})\n")
 
     if args.question:
-        answer_question(retriever, tag, args.question)
+        print_answer(answer_question(retriever, tag, args.question))
         return
 
     print("Interactive mode. Type a question, or 'quit'/'exit' to stop.\n")
@@ -198,9 +237,10 @@ def main():
         if question.lower() in ("quit", "exit"):
             break
 
-        answer = answer_question(retriever, tag, question, history=history or None)
-        if answer is not None and args.history_turns > 0:
-            history.append((question, answer))
+        result = answer_question(retriever, tag, question, history=history or None)
+        print_answer(result)
+        if result["success"] and args.history_turns > 0:
+            history.append((question, result["answer"]))
             history = history[-args.history_turns:]
 
 
