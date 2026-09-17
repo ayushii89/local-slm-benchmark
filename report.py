@@ -16,8 +16,13 @@ METRICS = ["ttft_ms", "tokens_per_sec", "total_latency_ms"]
 
 
 def find_latest_results() -> Path:
+    # Phase 1's default filenames are bare timestamps ("20260916T124147Z.jsonl"),
+    # unlike Phase 2/3's "structured_*"/"comparison_*" prefixes. An unscoped
+    # "*.jsonl" glob here would match those too, and since they share field
+    # names (ttft_ms, tokens_per_sec), a mismatch wouldn't even crash -- it
+    # would silently produce a Phase 1 report built from Phase 3 data.
     results_dir = Path("results")
-    files = sorted(results_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    files = sorted(results_dir.glob("[0-9]*.jsonl"), key=lambda p: p.stat().st_mtime)
     if not files:
         print("No results files found in results/", file=sys.stderr)
         sys.exit(1)
